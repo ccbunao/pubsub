@@ -14,7 +14,9 @@ set(CMAKE_FIND_PACKAGE_PREFER_CONFIG  TRUE)
 if(NOT TARGET tcp_pubsub::tcp_pubsub)
   find_package(tcp_pubsub REQUIRED)
 endif()
-find_package(GTest      REQUIRED)
+if(NOT TARGET GTest::gtest_main)
+  find_package(GTest REQUIRED)
+endif()
 
 set(sources
     src/atomic_signalable.h

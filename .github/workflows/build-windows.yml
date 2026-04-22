@@ -2,15 +2,15 @@ name: Windows
 
 on:
   push:
+    branches: [ main, master ]
   pull_request:
-    branches: [ master ]
+    branches: [ main, master ]
 
 env:
   # Customize the CMake build type here (Release, Debug, RelWithDebInfo, etc.)
   INSTALL_PREFIX: _install
   PROJECT_NAME:   tcp_pubsub
-  VS_TOOLSET:     v142
-  VS_NAME:        vs2019
+  VS_NAME:        vs2022
 
 jobs:
   build-windows:
@@ -24,7 +24,7 @@ jobs:
     # The CMake configure and build commands are platform agnostic and should work equally well on Windows or Mac.
     # You can convert this to a matrix build if you need cross-platform coverage.
     # See: https://docs.github.com/en/free-pro-team@latest/actions/learn-github-actions/managing-complex-workflows#using-a-build-matrix
-    runs-on: windows-2025
+    runs-on: windows-latest
 
     steps:
 
@@ -49,7 +49,6 @@ jobs:
     - name: Checkout
       uses: actions/checkout@v4
       with:
-        submodules:  'true'
         fetch-depth: 0
 
     ############################################
@@ -63,7 +62,6 @@ jobs:
       run: |
            cmake -B ${{github.workspace}}/_build ^
                  -A ${{ matrix.build_arch }} ^
-                 -T ${{ env.VS_TOOLSET }} ^
                  -DTCP_PUBSUB_BUILD_SAMPLES=ON ^
                  -DTCP_PUBSUB_BUILD_TESTS=ON ^
                  -DTCP_PUBSUB_USE_BUILTIN_ASIO=ON ^

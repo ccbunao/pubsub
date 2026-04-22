@@ -43,7 +43,7 @@ CMakeLists.txt.user
 
 #Build dir
 /_build
-/build
+/*build*
 /samples/integration_test/_build
 
 # Optional third-party checkouts (use submodules or FetchContent instead of committing vendor code)
