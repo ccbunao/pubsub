@@ -41,9 +41,13 @@ CMakeLists.txt.user
 # VS Code
 .vscode
 
-#Build dir
+# Codex local state
+.codex
+
+# Build dirs
 /_build
-/*build*
+/build
+/_build_ci
 /samples/integration_test/_build
 
 # Optional third-party checkouts (use submodules or FetchContent instead of committing vendor code)

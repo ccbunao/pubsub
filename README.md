@@ -1,27 +1,38 @@
-# tcp_pubsub - TCP Publish/Subscribe library
+# pubsub: TCP/SHM Publish/Subscribe library
 
-tcp_pubsub is a minimal publish-subscribe library that transports data via TCP. The project is CMake based. Dependencies can be provided either via git submodules or via CMake FetchContent (fallback).
+`pubsub` contains:
+
+- `tcp_pubsub`: a minimal publish/subscribe library that transports data via TCP
+- `shm_pubsub`: a minimal publish/subscribe library that transports data via local shared memory
+
+The project is CMake based. Dependencies can be provided either via git submodules or via CMake `FetchContent` (fallback).
 
 tcp_pubsub does not define a message format but only transports binary blobs. It does however define a protocol around that, which is kept as lightweight as possible.
 
-Dependencies:
+## Dependencies
 
 - [asio](https://github.com/chriskohlhoff/asio.git)
 - [recycle](https://github.com/steinwurf/recycle.git)
 
-Additional library:
+## APIs
 
-- `shm_pubsub`: A minimal publish-subscribe library that transports data via local shared memory.
+- TCP publisher/subscriber:
+  - Publisher API: `#include <tcp_pubsub/publisher.h>`
+  - Subscriber API: `#include <tcp_pubsub/subscriber.h>`
+- SHM publisher/subscriber:
   - Publisher API: `#include <shm_pubsub/shm/publisher.h>`
   - Subscriber API: `#include <shm_pubsub/shm/subscriber.h>`
 
 ## Hello World Example
 
-A very similar Example is also provided in the repository.
+Similar examples are also provided in the repository under `samples/`.
 
 ### Publisher
 
 ```cpp
+#include <chrono>
+#include <memory>
+#include <string>
 #include <thread>
 
 #include <tcp_pubsub/executor.h>
@@ -43,7 +54,7 @@ int main()
   {
     // Send the "Hello World" string by passing the pointer to the first
     // character and the length.
-    hello_world_publisher.send(&data_to_send[0], data_to_send.size());
+    hello_world_publisher.send(data_to_send.data(), data_to_send.size());
 
     std::this_thread::sleep_for(std::chrono::milliseconds(500));
   }
@@ -55,7 +66,11 @@ int main()
 ### Subscriber
 
 ```cpp
+#include <chrono>
+#include <functional>
 #include <iostream>
+#include <memory>
+#include <string>
 #include <thread>
 
 #include <tcp_pubsub/executor.h>
@@ -81,15 +96,15 @@ int main()
   std::function<void(const tcp_pubsub::CallbackData& callback_data)> callback_function
         = [](const tcp_pubsub::CallbackData& callback_data) -> void
           {
-            std::cout << "Received playload: "
+            std::cout << "Received payload: "
                       << std::string(callback_data.buffer_->data(), callback_data.buffer_->size())
                       << std::endl;
           };
 
-  // Set the callback to the subsriber
+  // Set the callback to the subscriber
   hello_world_subscriber.setCallback(callback_function);
     
-  // Prevent the application from exiting immediatelly
+  // Prevent the application from exiting immediately
   for (;;) std::this_thread::sleep_for(std::chrono::milliseconds(500));
   return 0;
 }
@@ -97,7 +112,7 @@ int main()
 
 ## CMake Options
 
-You can set the following CMake Options to control how tcp_pubsub is built:
+You can set the following CMake options to control how the project is built:
 
 | Option                             | Type  | Default | Explanation                                                                                                                                         |
 |------------------------------------|-------|---------|-----------------------------------------------------------------------------------------------------------------------------------------------------|
@@ -113,7 +128,11 @@ You can set the following CMake Options to control how tcp_pubsub is built:
 
 ## shm_pubsub 原理与优化笔记
 
-- 当前 `shm_pubsub` 的实现原理、时序图，以及如何用 ring buffer 优化以减少丢帧：`docs/shm_pubsub.md`
+- `shm_pubsub` 实现原理、时序图与丢帧/背压设计：`docs/shm_pubsub.md`
+
+## Function calling + pubsub（设计草案）
+
+- 如何把结构化 “tool call / tool result” 跑在 pubsub 上（含需求/场景/协议/安全/演进）：`docs/function_calling.md`
 
 ## How to checkout and build
 
@@ -122,28 +141,27 @@ There are several examples provided that aim to show you the functionality.
 1. Install cmake and git / git-for-windows
 
 2. Checkout this repo and (optionally) initialize submodules
-	```console
-	git clone https://github.com/ccbunao/pubsub.git
-	cd pubsub
-	git submodule init
-	git submodule update
-	```
 
-3. CMake the project *(Building as debug will add some debug output)*
-	```console
-	mkdir _build
-	cd _build
-	cmake .. -DCMAKE_BUILD_TYPE=Debug -DCMAKE_INSTALL_PREFIX=_install
-	```
+   ```console
+   git clone https://github.com/ccbunao/pubsub.git
+   cd pubsub
+   git submodule init
+   git submodule update
+   ```
 
-4. Build the project
-	- Linux: `make`
-	- Windows: Open `_build\tcp_pubsub.sln` with Visual Studio and build one of the example projects
+3. Configure + build
 
-5. Start either of the example pairs on the same machine.
-	- `hello_world_publisher /.exe` + `hello_world_subscriber /.exe`
-	  *or*
-	- `performance_publisher /.exe` + `performance_subscriber /.exe`
+   ```console
+   cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
+   cmake --build build -j
+   ```
+
+4. Run samples (examples)
+
+   - TCP: `hello_world_publisher` + `hello_world_subscriber`
+   - TCP performance: `performance_publisher` + `performance_subscriber`
+   - SHM: `hello_world_shm_publisher` + `hello_world_shm_subscriber`
+   - SHM performance: `performance_shm_publisher` + `performance_shm_subscriber`
 
 ## The Protocol (Version 0)
 
@@ -156,11 +174,11 @@ When using this library, you do not need to know how the protocol works. Both th
 
 The Protocol is quite simple:
 
-1. The **Subsriber** connects to the publisher and sends a ProtocolHandshakeRequest. This Message contains the maximum protocol Version the Subscriber supports
+1. The **Subscriber** connects to the publisher and sends a ProtocolHandshakeRequest. This message contains the maximum protocol version the Subscriber supports.
 
-2. The **Publisher** returns a ProtocolHandshakeResponse. This message contains the protocol version that will be used from now on. The version must not be higher than the version sent by the subsriber.
+2. The **Publisher** returns a ProtocolHandshakeResponse. This message contains the protocol version that will be used from now on. The version must not be higher than the version sent by the Subscriber.
 
-3. The **Publisher** starts sending data to the subsriber.
+3. The **Publisher** starts sending data to the Subscriber.
 
 _The ProtocolHandshake is meant to provide future-proof expansions. At the moment the only available protocol version is 0._
 

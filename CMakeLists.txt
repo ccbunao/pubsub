@@ -14,6 +14,7 @@ message(STATUS "Prefix Path: ${CMAKE_PREFIX_PATH}")
 
 option(PUBSUB_BUILD_TCP_PUBSUB "Build tcp_pubsub library" ON)
 option(PUBSUB_BUILD_SHM_PUBSUB "Build shm_pubsub library" ON)
+option(PUBSUB_BUILD_TOOLBUS   "Build toolbus protocol layer" ON)
 
 # CMake Options
 if (PUBSUB_BUILD_TCP_PUBSUB)
@@ -44,6 +45,12 @@ cmake_dependent_option(SHM_PUBSUB_BUILD_SAMPLES
   "Build shm_pubsub project samples"
   ON
   "PUBSUB_BUILD_SHM_PUBSUB"
+  OFF)
+
+cmake_dependent_option(TOOLBUS_BUILD_SAMPLES
+  "Build toolbus samples"
+  ON
+  "PUBSUB_BUILD_TOOLBUS;PUBSUB_BUILD_SHM_PUBSUB"
   OFF)
 
 if (PUBSUB_BUILD_TCP_PUBSUB)
@@ -90,6 +97,17 @@ if(PUBSUB_BUILD_SHM_PUBSUB)
   add_subdirectory(shm_pubsub)
 endif()
 
+if(PUBSUB_BUILD_TOOLBUS)
+  add_subdirectory(toolbus)
+endif()
+
+if(PUBSUB_BUILD_TOOLBUS AND PUBSUB_BUILD_TCP_PUBSUB)
+  add_subdirectory(toolbus_tcp)
+endif()
+
+if(PUBSUB_BUILD_TOOLBUS AND PUBSUB_BUILD_SHM_PUBSUB)
+  add_subdirectory(toolbus_shm)
+endif()
 
 if (PUBSUB_BUILD_TCP_PUBSUB)
   # Generic tcp_pubsub samples
@@ -112,6 +130,13 @@ if (SHM_PUBSUB_BUILD_SAMPLES)
   add_subdirectory(samples/hello_world_shm_subscriber)
   add_subdirectory(samples/performance_shm_publisher)
   add_subdirectory(samples/performance_shm_subscriber)
+endif()
+
+if (TOOLBUS_BUILD_SAMPLES)
+  add_subdirectory(samples/toolbus_shm_worker)
+  add_subdirectory(samples/toolbus_shm_orchestrator)
+  add_subdirectory(samples/toolbus_tcp_worker)
+  add_subdirectory(samples/toolbus_tcp_orchestrator)
 endif()
 
 # Make this package available for packing with CPack

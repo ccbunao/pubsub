@@ -20,8 +20,8 @@
 
 - 共享内存命名：`shm_pubsub/src/shm/shm_name.h`
 - 共享内存 layout：`shm_pubsub/src/shm/shm_layout.h`
-- Publisher 写入逻辑（slot seqlock 写 + write_idx 发布）：`shm_pubsub/src/publisher_impl.cpp:145`
-- Subscriber 轮询读取逻辑（按 read_idx 读 slot + 拷贝）：`shm_pubsub/src/subscriber_impl.cpp:231`
+- Publisher 写入逻辑（slot seqlock 写 + write_idx 发布）：`shm_pubsub/src/publisher_impl.cpp`
+- Subscriber 轮询读取逻辑（按 read_idx 读 slot + 拷贝）：`shm_pubsub/src/subscriber_impl.cpp`
 - 共享内存打开/映射：
   - POSIX：`shm_pubsub/src/shm/shm_region_posix.cpp`
   - Windows：`shm_pubsub/src/shm/shm_region_win32.cpp`
@@ -51,7 +51,7 @@
 
 ### 3.2 Publisher 写入协议（写侧）
 
-Publisher 在 `send()` 中（见 `shm_pubsub/src/publisher_impl.cpp:145`）：
+Publisher 在 `send()` 中（见 `shm_pubsub/src/publisher_impl.cpp`）：
 
 1. 计算 `next_idx = write_idx + 1`，确定对应 slot
 2. 若 ring 满：
@@ -64,7 +64,7 @@ Publisher 在 `send()` 中（见 `shm_pubsub/src/publisher_impl.cpp:145`）：
 
 ### 3.3 Subscriber 读取协议（读侧）
 
-Subscriber 在 `pollLoop()`（见 `shm_pubsub/src/subscriber_impl.cpp:231`）：
+Subscriber 在 `pollLoop()`（见 `shm_pubsub/src/subscriber_impl.cpp`）：
 
 - 读取 `write_idx`，若 `write_idx == last_read_idx` 则无新消息。
 - 若落后太多（`write_idx - last_read_idx > slot_count`），说明发生了覆盖：
@@ -94,7 +94,7 @@ sequenceDiagram
   alt Publisher first
     Pub->>OS: create_or_open(region_name, region_size)
     OS-->>Pub: mapped addr + owner=true
-    Pub->>Shm: init header (magic/version/capacity/seq=0/size=0)
+    Pub->>Shm: init header (magic/version/slot_count/slot_size/write_idx=0)
     Sub->>OS: open_existing(region_name)
     OS-->>Sub: mapped addr
     Sub->>Shm: validate header (magic/version)
@@ -109,7 +109,7 @@ sequenceDiagram
   end
 ```
 
-### 4.2 单条消息的写读（seqlock）
+### 4.2 单条消息的写读（slot seqlock + write_idx）
 
 ```mermaid
 sequenceDiagram
@@ -117,24 +117,29 @@ sequenceDiagram
   participant Shm as SharedMemory
   participant Sub as Subscriber pollLoop()
 
-  Pub->>Shm: seq += 1 (make odd)
-  Pub->>Shm: memcpy(payload)
-  Pub->>Shm: store(size, release)
-  Pub->>Shm: seq += 1 (make even)
+  Pub->>Shm: pick slot = (write_idx + 1) % slot_count
+  Pub->>Shm: slot.seq += 1 (make odd)
+  Pub->>Shm: memcpy(payload -> slot.data)
+  Pub->>Shm: store(slot.size/msg_idx, release)
+  Pub->>Shm: slot.seq += 1 (make even)
+  Pub->>Shm: store(write_idx = msg_idx, release)
 
   loop poll every N ms
-    Sub->>Shm: load seq_now
-    alt seq_now even and changed
-      Sub->>Shm: load seq1 (even)
-      Sub->>Shm: load size
-      Sub->>Shm: memcpy(payload -> local vector)
-      Sub->>Shm: load seq2
-      alt seq1 == seq2 and even
+    Sub->>Shm: load write_idx
+    alt write_idx > last_read_idx
+      Sub->>Shm: next = last_read_idx + 1
+      Sub->>Shm: slot = next % slot_count
+      Sub->>Shm: load slot.seq (even)
+      Sub->>Shm: load slot.msg_idx/slot.size
+      Sub->>Shm: memcpy(slot.data -> local vector)
+      Sub->>Shm: load slot.seq again
+      alt consistent snapshot
         Sub->>Sub: invoke callback
+        Sub->>Shm: update read_idx
       else inconsistent
         Sub->>Sub: retry (up to 3)
       end
-    else unchanged or odd
+    else no new
       Sub->>Sub: sleep
     end
   end
@@ -164,7 +169,7 @@ shm_pubsub::shm::Publisher pub("camera", opt);
 
 注意：如果你从旧版本（`k_version=1` 的单槽实现）升级到当前版本（`k_version=2`），同名 topic 的共享内存段会因为 layout 不兼容而创建失败。需要先停止相关进程并删除旧段（Linux 通常是 `/dev/shm/shm_pubsub_<topic>`），或换一个新的 topic 名称。
 
-### 5.3 可变长消息：字节环（byte ring）+ 记录头
+### 5.1 可变长消息：字节环（byte ring）+ 记录头
 
 如果消息大小变化很大，固定 slot 会浪费空间。另一种方案是 “byte ring”：
 
@@ -177,7 +182,7 @@ shm_pubsub::shm::Publisher pub("camera", opt);
 - 必须保证读侧能判断“记录完整写入”的边界（通常仍需 sequence/commit 指针）。
 - 对齐与 wrap-around 处理会增加复杂度，但吞吐/空间利用更好。
 
-### 5.1 多 Subscriber 怎么做（广播 ring）
+### 5.2 多 Subscriber 怎么做（广播 ring）
 
 如果一个 topic 需要多个 Subscriber，同时又想尽量不丢帧，通常有三类设计：
 
@@ -195,9 +200,9 @@ shm_pubsub::shm::Publisher pub("camera", opt);
 
 当前实现采用“每个 subscriber 一个 `read_idx`”的广播 ring 模式，且提供“保新/保旧”策略；想要做到“严格不丢帧”，需要在系统层面保证消费者总体算力足够，或允许 Publisher 阻塞背压（当前实现默认不阻塞）。
 
-### 5.5 ring buffer 之外：通知机制（减少轮询带来的延迟/CPU）
+### 5.3 ring buffer 之外：通知机制（减少轮询带来的延迟/CPU）
 
-当前 Subscriber 是固定周期 sleep 轮询（`shm_pubsub/src/subscriber_impl.cpp:179`、`229`），想要低延迟且低 CPU，可以增加通知机制：
+当前 Subscriber 是固定周期 sleep 轮询，想要低延迟且低 CPU，可以增加通知机制：
 
 - Linux：`eventfd`/`futex`/`pthread_cond`（跨进程共享需 `PTHREAD_PROCESS_SHARED`，futex 适配更直接）
 - Windows：命名事件/信号量
@@ -211,13 +216,13 @@ shm_pubsub::shm::Publisher pub("camera", opt);
 
 下面这些与 ring buffer 可以叠加，目标是“减少因实现细节造成的丢帧/抖动”。
 
-1. **修复异步 callback 的单槽覆盖（当前实现会丢）**
-   - 现状：异步模式只保存 `last_callback_data_` 一个槽位，poll 线程来的快会覆盖（等价于队列深度 1），见 `shm_pubsub/src/subscriber_impl.cpp:219`。
-   - 优化：把它改成 bounded queue（例如 `std::deque<CallbackData>` 或 lock-free SPSC 队列），让 callback 线程逐条处理；满了再按策略丢或背压。
+1. **把 callback 队列策略“产品化”**
+   - 现状：异步 callback 使用进程内 bounded queue；队列满会丢弃最旧的一条并打印日志（以降低尾延迟）。
+   - 可优化：把队列深度、丢弃策略（保新/保旧/阻塞）做成显式配置项，并增加统计接口。
 
-2. **Subscriber 侧 drain（一次 poll 处理多条）**
-   - 当前 loop 每次最多处理 1 条，然后 sleep（`shm_pubsub/src/subscriber_impl.cpp:229`）。
-   - 如果用了 ring buffer，读侧应在一次唤醒/一次 poll 中循环读到“空”为止，避免堆积。
+2. **Subscriber 侧 drain（一次 wakeup 处理多条）**
+   - 现状：subscriber 每次醒来会尝试 drain 多条消息（避免“读 1 条就 sleep”造成的假性落后）。
+   - 可优化：将单次 drain 上限做成可配置，或在高负载下自适应调整。
 
 3. **背压与丢弃策略明确化（系统级保证的前提）**
    - “绝对不丢帧”通常意味着：消费者处理能力必须 ≥ 生产者发送速度，否则只能：
@@ -226,7 +231,7 @@ shm_pubsub::shm::Publisher pub("camera", opt);
    - 建议把“满了怎么办”变成显式配置项。
 
 4. **减少拷贝与内存分配（降低尾延迟）**
-   - 当前每条消息都会 `make_shared<vector<char>>` + `resize` + `memcpy`，见 `shm_pubsub/src/subscriber_impl.cpp:184`、`196`、`199`。
+   - 当前每条消息都会 `make_shared<vector<char>>` + `resize` + `memcpy`。
    - 优化思路：
      - 预分配/复用 buffer（对象池）
      - 同步 callback 可考虑 zero-copy：把 `CallbackData` 改成指向共享内存的 `span`（注意生命周期：下一次写入会覆盖）
@@ -239,8 +244,9 @@ shm_pubsub::shm::Publisher pub("camera", opt);
 
 - Publisher 示例：`samples/hello_world_shm_publisher/src/main.cpp`
 - Subscriber 示例：`samples/hello_world_shm_subscriber/src/main.cpp`
+- 性能测试：`samples/performance_shm_publisher/src/main.cpp` + `samples/performance_shm_subscriber/src/main.cpp`
 
-如果你希望我进一步帮你落地 ring buffer（SPSC 或 broadcast 版），需要先确认两点语义：
+如果你的应用对“可靠性/不丢帧”有更明确的目标，建议先把语义说清楚：
 
-1) 是否允许一个 topic 有多个 subscriber？  
-2) “不丢帧”的定义是：必须每条都到（背压允许阻塞），还是允许丢但要可观测/可配置？
+1) topic 是否允许多个 subscriber？是否允许 subscriber 动态加入/离开？
+2) ring 满了之后，是阻塞背压，还是允许丢帧（保新/保旧），以及是否需要统计/告警？
